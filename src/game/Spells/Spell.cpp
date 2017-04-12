@@ -1735,9 +1735,6 @@ void Spell::SetTargetMap(SpellEffectIndex effIndex, uint32 targetMode, UnitList&
                 case 28796:                                 // Poison Bolt Volley (Naxx, Faerlina)
                     unMaxTargets = 10;
                     break;
-                case 25991:                                 // Poison Bolt Volley (AQ40, Pincess Huhuran)
-                    unMaxTargets = 15;
-                    break;
             }
             break;
         }
@@ -1759,6 +1756,35 @@ void Spell::SetTargetMap(SpellEffectIndex effIndex, uint32 targetMode, UnitList&
                     break;
                 }
                 default:
+                    break;
+            }
+            break;
+        }
+        default:
+            break;
+    }
+
+    bool SelectClosestTargets = false;
+
+    // custom selection cases
+    switch (m_spellInfo->SpellFamilyName)
+    {
+        case SPELLFAMILY_GENERIC:
+        {
+            switch (m_spellInfo->Id)
+            {
+                case 26052:                                 // Poison Bolt Volley (AQ40, Princess Huhuran)
+                    SelectClosestTargets = true;
+                    break;
+            }
+            break;
+        }
+        case SPELLFAMILY_HUNTER:
+        {
+            switch (m_spellInfo->Id)
+            {
+                case 26180:                                 // Wyvern Sting (AQ40, Princess Huhuran)
+                    SelectClosestTargets = true;
                     break;
             }
             break;
@@ -2002,7 +2028,14 @@ void Spell::SetTargetMap(SpellEffectIndex effIndex, uint32 targetMode, UnitList&
                     if ((*itr)->IsWithinDist(m_caster, minDist))
                         targetUnitMap.erase(itr);
                 }
-            }
+	    }
+            if (SelectClosestTargets && unMaxTargets && targetUnitMap.size() > unMaxTargets)
+	    {
+                targetUnitMap.sort(TargetDistanceOrderNear(m_caster));
+                UnitList::iterator itr = targetUnitMap.begin();
+                advance(itr, unMaxTargets);
+                targetUnitMap.erase(itr, targetUnitMap.end());
+	    }
             break;
         }
         case TARGET_AREAEFFECT_INSTANT:

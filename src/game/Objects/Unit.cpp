@@ -2872,6 +2872,10 @@ SpellMissInfo Unit::MagicSpellHitResult(Unit *pVictim, SpellEntry const *spell, 
     if (!pVictim->isAlive())
         return SPELL_MISS_NONE;
 
+    // Spell cannot be resisted (not exist on dbc, custom flag)
+    if (spell->AttributesEx4 & SPELL_ATTR_EX4_IGNORE_RESISTANCES)
+        return SPELL_MISS_NONE;
+
     int32 hitChance = MagicSpellHitChance(pVictim, spell, spellPtr);
     int32 missChance = 10000 - hitChance;
     int32 rand = irand(0, 10000);
@@ -4592,11 +4596,40 @@ void Unit::RemoveSpellAuraHolder(SpellAuraHolder *holder, AuraRemoveMode mode)
     else
         delete holder;
 
-    if (mode != AURA_REMOVE_BY_EXPIRE && IsChanneledSpell(AurSpellInfo) && caster)
+    uint32 uiTriggeredSpell = 0;
+
+    switch (mode)
     {
-        Spell *channeled = caster->GetCurrentSpell(CURRENT_CHANNELED_SPELL);
-        if (channeled && channeled->m_spellInfo->Id == auraSpellId && channeled->m_targets.getUnitTarget() == this)
-            caster->InterruptSpell(CURRENT_CHANNELED_SPELL);
+    case AURA_REMOVE_BY_EXPIRE:
+        break;
+    case AURA_REMOVE_BY_DISPEL:
+        // Spell that trigger another spell on dispell
+        switch (auraSpellId)
+        {
+            // Wyvern Sting (AQ40, Princess Huhuran)
+        case 26180:
+            uiTriggeredSpell = 26233;
+            break;
+        default:
+            break;
+        }
+        // No break
+    default:
+    {
+        if (IsChanneledSpell(AurSpellInfo) && caster)
+        {
+            Spell *channeled = caster->GetCurrentSpell(CURRENT_CHANNELED_SPELL);
+            if (channeled && channeled->m_spellInfo->Id == auraSpellId && channeled->m_targets.getUnitTarget() == this)
+                caster->InterruptSpell(CURRENT_CHANNELED_SPELL);
+
+        }
+        break;
+    }
+    }
+
+    if (uiTriggeredSpell && caster)
+    {
+        caster->CastSpell(this, uiTriggeredSpell, true);
     }
 }
 
@@ -6003,6 +6036,10 @@ int32 Unit::DealHeal(Unit *pVictim, uint32 addhealth, SpellEntry const *spellPro
 
     if (unit->GetTypeId() == TYPEID_PLAYER)
         unit->SendHealSpellLog(pVictim, spellProto->Id, addhealth, critical);
+
+    // Script Event HealedBy
+    if (pVictim->AI())
+        pVictim->AI()->HealedBy(this, addhealth);
 
     return gain;
 }
