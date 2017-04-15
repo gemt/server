@@ -66,6 +66,21 @@ enum
     NPC_DIRT_MOUND             = 15712,
 };
 
+/*
+ * Sand Blast timers are based on June 2006 values (15-20s) as shown in
+ * https://www.youtube.com/watch?v=REmX3uRTFkQ and further reduced to account
+ * for April 2006 nerfs (http://blue.cardplace.com/cache/wow-dungeons/481724.htm &
+ * http://blue.cardplace.com/cache/wow-general/7950998.htm
+ * Sweep timers based on the same video. No known nerfs.
+ */
+const uint32_t SANDBLAST_TIMER_INITIAL_MIN = 30000;
+const uint32_t SANDBLAST_TIMER_INITIAL_MAX = 45000;
+const uint32_t SANDBLAST_TIMER_MIN         = 10000;
+const uint32_t SANDBLAST_TIMER_MAX         = 15000;
+const uint32_t SUBMERGE_TIMER              = 60000;
+const uint32_t SUBMERGE_ANIMATION_INVIS    = 2000;
+const uint32_t SWEEP_TIMER                 = 15000;
+
 struct boss_ouroAI : public Scripted_NoMovementAI
 {
     boss_ouroAI(Creature* pCreature) : Scripted_NoMovementAI(pCreature)
@@ -81,6 +96,7 @@ struct boss_ouroAI : public Scripted_NoMovementAI
     uint32 m_uiSubmergeTimer;
     uint32 m_uiSummonBaseTimer;
     uint32 m_uiNoMeleeTimer;
+    uint32 m_uiSubmergeInvisTimer;
 
     uint32 m_uiSummonMoundTimer;
 
@@ -93,10 +109,11 @@ struct boss_ouroAI : public Scripted_NoMovementAI
 
     void Reset()
     {
-        m_uiSweepTimer        = urand(35000, 40000);
-        m_uiSandBlastTimer    = urand(30000, 45000);
-        m_uiSubmergeTimer     = 90000;
+        m_uiSweepTimer        = urand(30000, 40000);
+        m_uiSandBlastTimer    = urand(SANDBLAST_TIMER_INITIAL_MIN, SANDBLAST_TIMER_INITIAL_MAX);
+        m_uiSubmergeTimer     = SUBMERGE_TIMER;
         m_uiSummonBaseTimer   = 2000;
+        m_uiSubmergeInvisTimer = SUBMERGE_ANIMATION_INVIS;
         // Source : http://wowwiki.wikia.com/wiki/Ouro
         // "Ouro seems to give you about 10 seconds to get a MT in there when he pops up"
         m_uiNoMeleeTimer      = 10000;
@@ -161,10 +178,10 @@ struct boss_ouroAI : public Scripted_NoMovementAI
 
     void SpellHitTarget(Unit* pTarget, const SpellEntry* pSpell) override
     {
-        if (pSpell->Id == SPELL_SANDBLAST)
+        if (pSpell->Id == SPELL_SANDBLAST && pTarget)
         {
-            if (m_creature->getThreatManager().getThreat(m_creature->getVictim()))
-                m_creature->getThreatManager().modifyThreatPercent(m_creature->getVictim(), -100);
+            if (m_creature->getThreatManager().getThreat(pTarget))
+                m_creature->getThreatManager().modifyThreatPercent(pTarget, -100);
         }
     }
 
@@ -174,24 +191,30 @@ struct boss_ouroAI : public Scripted_NoMovementAI
         // "Ouro has a chance to submerge every 1.5minutes.
         // He will not submerge if he is busy casting a Sand Blast or Sweep, else he will submerge
         // (ie. the chance of submerging is totally random)"
-        m_uiSubmergeTimer = 90000;
-        if (CanCastSpell(m_creature, sSpellMgr.GetSpellEntry(SPELL_SUBMERGE_VISUAL), false) == CAST_OK)
+        m_uiSubmergeTimer = SUBMERGE_TIMER;
+
+        if (DoCastSpellIfCan(m_creature, SPELL_SUBMERGE_VISUAL, false) == CAST_OK)
         {
             if (!isReset)
             {
                 DoCastSpellIfCan(m_creature, SPELL_SUMMON_OURO_MOUNDS, CAST_TRIGGERED);
                 DoCastSpellIfCan(m_creature, SPELL_SUMMON_TRIGGER, CAST_TRIGGERED);
             }
-            m_creature->CastSpell(m_creature, SPELL_DESPAWN_BASE, true);
-            DoCastSpellIfCan(m_creature, SPELL_SUBMERGE_VISUAL);
 
-            m_creature->SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE);
+            m_creature->CastSpell(m_creature, SPELL_DESPAWN_BASE, true);
+
+            m_creature->SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE | UNIT_FLAG_NON_ATTACKABLE);
             ClearTargetIcon();
 
             m_bSubmerged      = true;
             m_uiSubmergeTimer = 30000;
             m_uiNoMeleeTimer  = 10000;
-
+            m_uiSubmergeInvisTimer = SUBMERGE_ANIMATION_INVIS;
+            DoResetThreat();
+        }
+        else
+        {
+            m_uiSubmergeTimer = 2000; // try again in a moment
         }
     }
 
@@ -271,16 +294,22 @@ struct boss_ouroAI : public Scripted_NoMovementAI
             if (m_uiSweepTimer < uiDiff)
             {
                 if (DoCastSpellIfCan(m_creature, SPELL_SWEEP) == CAST_OK)
-                    m_uiSweepTimer = 20000;
+                    m_uiSweepTimer = SWEEP_TIMER;
             }
             else
                 m_uiSweepTimer -= uiDiff;
 
             // Sand Blast
             if (m_uiSandBlastTimer < uiDiff)
-	    {
-                if (DoCastSpellIfCan(m_creature, SPELL_SANDBLAST) == CAST_OK)
-                    m_uiSandBlastTimer = 22000;
+            {
+                // one post claims Sand Blast has melee priority when enraged, another post claims otherwise :(
+                // note: need testing
+                auto target = m_creature->getThreatManager().getHostileTarget();
+
+                if (target && DoCastSpellIfCan(target, SPELL_SANDBLAST) == CAST_OK)
+                {
+                    m_uiSandBlastTimer = urand(SANDBLAST_TIMER_MIN, SANDBLAST_TIMER_MAX);
+                }
             }
             else
                 m_uiSandBlastTimer -= uiDiff;
@@ -350,6 +379,9 @@ struct boss_ouroAI : public Scripted_NoMovementAI
             // Resume combat
             if (m_uiSubmergeTimer < uiDiff)
             {
+                m_creature->SetVisibility(VISIBILITY_ON);
+                m_creature->RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE | UNIT_FLAG_NON_ATTACKABLE);
+
                 // Teleport to the trigger in order to get a new location
                 if (Creature* pTrigger = m_creature->GetMap()->GetCreature(m_ouroTriggerGuid))
                     m_creature->NearTeleportTo(pTrigger->GetPositionX(), pTrigger->GetPositionY(), pTrigger->GetPositionZ(), 0);
@@ -365,13 +397,14 @@ struct boss_ouroAI : public Scripted_NoMovementAI
                     for (ThreatList::const_iterator i = lThreat.begin(); i != lThreat.end(); ++i)
                     {
                         Unit* pUnit = m_creature->GetMap()->GetUnit((*i)->getUnitGuid());
-                        if (pUnit && pUnit->GetDistance2d(m_creature) < 5.0f)
+                        if (pUnit && pUnit->GetDistance2d(m_creature) < 20.0f)
                             m_creature->CastSpell(pUnit, SPELL_GROUND_RUPTURE, true);
                     }
 
                     m_bSubmerged        = false;
                     m_uiSummonBaseTimer = 2000;
                     m_uiSubmergeTimer   = 90000;
+                    m_uiSubmergeInvisTimer = SUBMERGE_ANIMATION_INVIS;
 
                     DespawnCreatures(false);
 
@@ -384,7 +417,19 @@ struct boss_ouroAI : public Scripted_NoMovementAI
                 }
             }
             else
+            {
+                if (m_uiSubmergeInvisTimer < uiDiff && m_creature->GetVisibility() == VISIBILITY_ON)
+                {
+                    m_creature->SetVisibility(VISIBILITY_OFF);
+                    m_uiSubmergeInvisTimer = SUBMERGE_ANIMATION_INVIS;
+                }
+                else
+                {
+                    m_uiSubmergeInvisTimer -= uiDiff;
+                }
+
                 m_uiSubmergeTimer -= uiDiff;
+            }
         }
     }
 };
@@ -407,13 +452,18 @@ struct npc_ouro_spawnerAI : public Scripted_NoMovementAI
         DoCastSpellIfCan(m_creature, SPELL_DIRTMOUND_PASSIVE);
     }
 
-    void Aggro(Unit* /*pWho*/)
+    void MoveInLineOfSight(Unit* pWho) override
     {
-        if (!m_bHasSummoned)
+        // Spawn Ouro on LoS check
+        if (!m_bHasSummoned && pWho->GetTypeId() == TYPEID_PLAYER && !((Player*)pWho)->isGameMaster() && m_creature->IsWithinDistInMap(pWho, 25.0f))
         {
-            DoCastSpellIfCan(m_creature, SPELL_SUMMON_OURO, CAST_TRIGGERED);
-            m_bHasSummoned = true;
+            if (DoCastSpellIfCan(m_creature, SPELL_SUMMON_OURO) == CAST_OK)
+            {
+                m_bHasSummoned = true;
+            }
         }
+
+        ScriptedAI::MoveInLineOfSight(pWho);
     }
 
     void JustSummoned(Creature* pSummoned)
@@ -444,11 +494,17 @@ struct npc_dirt_moundAI : public ScriptedAI
     ObjectGuid m_TargetGUID;
     ObjectGuid m_CurrentTargetGUID;
 
+    void JustRespawned() override
+    {
+        m_creature->SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE | UNIT_FLAG_NON_ATTACKABLE);
+        ScriptedAI::JustRespawned();
+    }
+
     void Reset()
     {
         m_uiDespawnTimer = 30000;
-	m_TargetGUID.Clear();
-	m_CurrentTargetGUID.Clear();
+	    m_TargetGUID.Clear();
+	    m_CurrentTargetGUID.Clear();
 
         DoCastSpellIfCan(m_creature, SPELL_DIRTMOUND_PASSIVE);
     }
@@ -456,9 +512,9 @@ struct npc_dirt_moundAI : public ScriptedAI
     void MoveInLineOfSight(Unit *who)
     {
         if (!m_TargetGUID && who->GetTypeId() == TYPEID_PLAYER)
-	{
-  	    m_TargetGUID = who->GetGUID();
-	}
+        {
+  	        m_TargetGUID = who->GetGUID();
+	    }
     }
 
     void UpdateAI(const uint32 uiDiff)
@@ -470,6 +526,7 @@ struct npc_dirt_moundAI : public ScriptedAI
         if (bForceChangeTarget || m_uiChangeTargetTimer < uiDiff)
         {
             m_CurrentTargetGUID.Clear();
+
             if (Unit* pTarget = m_creature->GetMap()->GetUnit(m_TargetGUID))
             {
                 m_creature->GetMotionMaster()->MoveFollow(pTarget, 0.0f, 0.0f);
@@ -491,7 +548,9 @@ struct npc_dirt_moundAI : public ScriptedAI
             m_creature->ForcedDespawn();
         }
         else
+        {
             m_uiDespawnTimer -= uiDiff;
+        }
     }
 };
 
@@ -513,11 +572,10 @@ struct npc_ouro_scarabAI : public ScriptedAI
 
     void MoveInLineOfSight(Unit *who)
     {
-        if (who->GetTypeId() == TYPEID_PLAYER && !m_creature->getVictim()
-            && !urand(0, 5))
-	{
+        if (who->GetTypeId() == TYPEID_PLAYER && !m_creature->getVictim() && !urand(0, 5))
+	    {
             AttackStart(who);
-	}
+	    }
     }
 
     void UpdateAI(const uint32 uiDiff)
@@ -546,12 +604,9 @@ struct go_sandworm_baseAI: public GameObjectAI
     bool OnUse(Unit* pUser)
     {
         WorldLocation loc;
+        pUser->GetObjectScale();
         pUser->GetPosition(loc);
-        me->Relocate(
-            loc.coord_x,
-            loc.coord_y,
-            loc.coord_z,
-            loc.orientation);
+
         if (m_bActive)
         {
             m_bActive = false;

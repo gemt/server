@@ -123,6 +123,16 @@ struct boss_viscidusAI : public ScriptedAI
         ResetViscidusState(false);
     }
 
+    void MoveInLineOfSight(Unit* who) override
+    {
+        if (who->GetTypeId() == TYPEID_PLAYER && !m_creature->getVictim() && m_creature->IsWithinDistInMap(who, 95.0f, true))
+        {
+            AttackStart(who);
+        }
+
+        ScriptedAI::MoveInLineOfSight(who);
+    }
+
     void Aggro(Unit* /*pWho*/)
     {
         if (m_pInstance)
@@ -173,6 +183,11 @@ struct boss_viscidusAI : public ScriptedAI
 
     void ResetViscidusState(bool bApplyToxin)
     {
+        if (m_creature->GetVisibility() == VISIBILITY_OFF)
+        {
+            DoCast(m_creature, SPELL_VISCIDUS_TELEPORT, CAST_TRIGGERED);
+        }
+
         DoResetThreat();
         m_creature->SetVisibility(VISIBILITY_ON);
         m_creature->clearUnitState(UNIT_STAT_DIED);
@@ -332,11 +347,6 @@ struct boss_viscidusAI : public ScriptedAI
             {
                 // Make invisible
                 m_creature->SetVisibility(VISIBILITY_OFF);
-
-                DoCastSpellIfCan(m_creature, SPELL_VISCIDUS_TELEPORT, CAST_TRIGGERED);
-                float fX, fY, fZ;
-                m_creature->GetRespawnCoord(fX, fY, fZ);
-                m_creature->NearTeleportTo(fX, fY, fZ, 0.0f);
                 m_uiExplodeDelayTimer = 0;
             }
             else
