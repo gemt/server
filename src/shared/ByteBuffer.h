@@ -399,7 +399,7 @@ class ByteBuffer
 
         void append(const ByteBuffer& buffer)
         {
-            if(buffer.wpos())
+            if(buffer.size())
                 append(buffer.contents(), buffer.wpos());
         }
 
